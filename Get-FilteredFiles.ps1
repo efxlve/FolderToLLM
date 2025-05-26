@@ -5,7 +5,7 @@ function Get-FilteredFileItems {
     param(
         [string]$RootPath,
         [string[]]$IncludeFolders = @(),
-        [string[]]$ExcludeFolders = @(),
+        [string[]]$ExcludeFolders = @(), # Bu parametre [".svelte-kit", "build", "node_modules", "backend"] şeklinde bir dizi olarak gelir
         [string[]]$IncludeExtensions = @(), 
         [string[]]$ExcludeExtensions = @(), 
         [long]$MinSize = -1, 
@@ -14,73 +14,116 @@ function Get-FilteredFileItems {
 
     Write-Host "DEBUG: Get-FilteredFileItems called." -ForegroundColor Yellow
     Write-Host "DEBUG: RootPath: $RootPath" -ForegroundColor Yellow
-    Write-Host "DEBUG: IncludeFolders: $($IncludeFolders -join ', ')" -ForegroundColor Yellow
-    Write-Host "DEBUG: ExcludeFolders: $($ExcludeFolders -join ', ')" -ForegroundColor Yellow
-    Write-Host "DEBUG: IncludeExtensions: $($IncludeExtensions -join ', ')" -ForegroundColor Cyan # Critical for this issue
-    Write-Host "DEBUG: ExcludeExtensions: $($ExcludeExtensions -join ', ')" -ForegroundColor Yellow
+    Write-Host "DEBUG: IncludeFolders (raw): $($IncludeFolders -join ', ')" -ForegroundColor Yellow
+    Write-Host "DEBUG: ExcludeFolders (raw): $($ExcludeFolders -join ', ')" -ForegroundColor Yellow # Bu, Write-Host'un diziyi yazdırma şekli
+    Write-Host "DEBUG: IncludeExtensions (raw): $($IncludeExtensions -join ', ')" -ForegroundColor Cyan
+    Write-Host "DEBUG: ExcludeExtensions (raw): $($ExcludeExtensions -join ', ')" -ForegroundColor Yellow
     Write-Host "DEBUG: MinSize: $MinSize, MaxSize: $MaxSize" -ForegroundColor Yellow
 
-    $allFiles = Get-ChildItem -Path $RootPath -Recurse -File -ErrorAction SilentlyContinue
-    Write-Host "DEBUG: Found $($allFiles.Count) total files initially in $RootPath." -ForegroundColor Yellow
+    # Normalize RootPath to an absolute path
+    $absoluteRootPath = ""
+    try {
+        $absoluteRootPath = (Resolve-Path $RootPath -ErrorAction Stop).Path
+    } catch {
+        Write-Error "CRITICAL: Could not resolve RootPath: $RootPath. Aborting."
+        return # Fonksiyondan çık
+    }
+    Write-Host "DEBUG: Absolute RootPath: $absoluteRootPath" -ForegroundColor Yellow
 
-    # Using a generic list for adding items
-    $filteredFileResult = New-Object System.Collections.Generic.List[System.IO.FileInfo]
+    $allFiles = Get-ChildItem -Path $absoluteRootPath -Recurse -File -ErrorAction SilentlyContinue
+    Write-Host "DEBUG: Found $($allFiles.Count) total files initially in $absoluteRootPath." -ForegroundColor Yellow
+
+    # Prepare a list of absolute paths for excluded folders
+    $normalizedAbsoluteExcludeFolderPaths = [System.Collections.Generic.List[string]]::new()
+    if ($ExcludeFolders -and $ExcludeFolders.Count -gt 0) {
+        Write-Host "DEBUG: Processing ExcludeFolders array. Count: $($ExcludeFolders.Count)" -ForegroundColor DarkCyan
+        foreach ($excFolderItem in $ExcludeFolders) { # $ExcludeFolders bir dizi olduğu için her elemanı tek tek işlenir
+            $folderPathToResolve = Join-Path $absoluteRootPath $excFolderItem
+            try {
+                # Resolve-Path ile klasörün varlığını kontrol et ve tam yolunu al
+                $resolvedPath = (Resolve-Path $folderPathToResolve -ErrorAction Stop).Path
+                if (Test-Path $resolvedPath -PathType Container) {
+                    $normalizedAbsoluteExcludeFolderPaths.Add($resolvedPath)
+                    Write-Host "DEBUG: Added to Exclude List (resolved): '$excFolderItem' -> '$resolvedPath'" -ForegroundColor DarkGreen
+                } else {
+                    Write-Warning "Exclude folder path '$excFolderItem' (resolved to '$resolvedPath') is not a directory. It will be ignored."
+                }
+            } catch {
+                # Resolve-Path hata verirse, klasör bulunamadı demektir. Bu bir uyarıdır, hata değil.
+                Write-Warning "Could not resolve exclude folder path: '$excFolderItem' (tried as '$folderPathToResolve'). It will be ignored for exclusion."
+            }
+        }
+        Write-Host "DEBUG: Final Normalized Absolute ExcludeFolderPaths for matching: $($normalizedAbsoluteExcludeFolderPaths -join '; ')" -ForegroundColor DarkCyan
+    }
+
+    # Prepare a list of absolute paths for included folders
+    $normalizedAbsoluteIncludeFolderPaths = [System.Collections.Generic.List[string]]::new()
+    if ($IncludeFolders -and $IncludeFolders.Count -gt 0) {
+        Write-Host "DEBUG: Processing IncludeFolders array. Count: $($IncludeFolders.Count)" -ForegroundColor DarkCyan
+        foreach ($incFolderItem in $IncludeFolders) {
+            $folderPathToResolve = Join-Path $absoluteRootPath $incFolderItem
+            try {
+                $resolvedPath = (Resolve-Path $folderPathToResolve -ErrorAction Stop).Path
+                if (Test-Path $resolvedPath -PathType Container) {
+                    $normalizedAbsoluteIncludeFolderPaths.Add($resolvedPath)
+                    Write-Host "DEBUG: Added to Include List (resolved): '$incFolderItem' -> '$resolvedPath'" -ForegroundColor DarkGreen
+                } else {
+                    Write-Warning "Include folder path '$incFolderItem' (resolved to '$resolvedPath') is not a directory. It will be ignored."
+                }
+            } catch {
+                Write-Warning "Could not resolve include folder path: '$incFolderItem' (tried as '$folderPathToResolve'). It will be ignored for inclusion."
+            }
+        }
+        Write-Host "DEBUG: Final Normalized Absolute IncludeFolderPaths for matching: $($normalizedAbsoluteIncludeFolderPaths -join '; ')" -ForegroundColor DarkCyan
+    }
+
+
+    $filteredFileResult = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
 
     foreach ($file in $allFiles) {
-        $currentFileNameForDebug = $file.Name
-        $currentFileExtForDebug = $file.Extension.ToLowerInvariant()
-        # Write-Host "DEBUG: ----- Processing File: '$($file.FullName)' (Ext: '$currentFileExtForDebug') -----" -ForegroundColor Magenta
-        
         $shouldProcess = $true
         [string]$reasonForFiltering = "Passed initial check."
 
         # Folder Include Filter
-        if ($IncludeFolders.Count -gt 0) {
+        if ($normalizedAbsoluteIncludeFolderPaths.Count -gt 0) {
             $matchIncludeFolder = $false
-            foreach ($incFolder in $IncludeFolders) {
-                $fullIncFolderPath = Join-Path $RootPath $incFolder
-                $pattern = if ($incFolder.EndsWith('\*') -or $incFolder.EndsWith('/*')) { $fullIncFolderPath.Replace('\*','\*').Replace('/*','\*') } else { $fullIncFolderPath + '\*' }
-                if ($file.DirectoryName -like $pattern -or $file.DirectoryName -eq $fullIncFolderPath) {
+            foreach ($absIncFolderPath in $normalizedAbsoluteIncludeFolderPaths) {
+                if ($file.FullName.StartsWith($absIncFolderPath + [System.IO.Path]::DirectorySeparatorChar) -or $file.DirectoryName -eq $absIncFolderPath) {
                     $matchIncludeFolder = $true; break
                 }
             }
             if (-not $matchIncludeFolder) {
-                $shouldProcess = $false; $reasonForFiltering = "Did not match IncludeFolders: '$($IncludeFolders -join ", ")'"
+                $shouldProcess = $false
+                $reasonForFiltering = "File '$($file.FullName)' not in any included folders: $($normalizedAbsoluteIncludeFolderPaths -join ', ')"
             }
         }
 
         # Folder Exclude Filter
-        if ($shouldProcess -and $ExcludeFolders.Count -gt 0) {
-            foreach ($excFolder in $ExcludeFolders) {
-                $fullExcFolderPath = Join-Path $RootPath $excFolder
-                $pattern = if ($excFolder.EndsWith('\*') -or $excFolder.EndsWith('/*')) { $fullExcFolderPath.Replace('\*','\*').Replace('/*','\*') } else { $fullExcFolderPath + '\*' }
-                if ($file.DirectoryName -like $pattern -or $file.DirectoryName -eq $fullExcFolderPath) {
-                    $shouldProcess = $false; $reasonForFiltering = "Matched ExcludeFolders: '$excFolder'"; break
+        if ($shouldProcess -and $normalizedAbsoluteExcludeFolderPaths.Count -gt 0) {
+            foreach ($absExcFolderPath in $normalizedAbsoluteExcludeFolderPaths) {
+                if ($file.FullName.StartsWith($absExcFolderPath + [System.IO.Path]::DirectorySeparatorChar) -or $file.DirectoryName -eq $absExcFolderPath) {
+                    $shouldProcess = $false
+                    $reasonForFiltering = "File '$($file.FullName)' is within excluded folder '$absExcFolderPath'."
+                    break 
                 }
             }
         }
 
         # Extension Include Filter
         if ($shouldProcess -and $IncludeExtensions.Count -gt 0) {
-            # Write-Host "DEBUG:   ExtIncl Check for '$currentFileNameForDebug'. FileExt: '$currentFileExtForDebug'. TargetExts: '$($IncludeExtensions -join '; ')'" -ForegroundColor Cyan
-            if (-not ($IncludeExtensions -contains $currentFileExtForDebug)) {
+            $currentFileExtForDebug = $file.Extension.ToLowerInvariant() # Normalleştirilmiş uzantılarla karşılaştırmak için
+            if (-not ($IncludeExtensions -contains $currentFileExtForDebug)) { # $IncludeExtensions CollectAndPrint.ps1'de normalleştirilmiş olmalı
                 $shouldProcess = $false
-                $reasonForFiltering = "Ext '$currentFileExtForDebug' NOT IN IncludeExtensions '$($IncludeExtensions -join '; ')'."
-                # Write-Host "DEBUG:   '$currentFileNameForDebug' FAILED IncludeExtensions. Reason: $reasonForFiltering" -ForegroundColor Red
-            } else {
-                # Write-Host "DEBUG:   '$currentFileNameForDebug' PASSED IncludeExtensions." -ForegroundColor Green
+                $reasonForFiltering = "Ext '$($file.Extension)' NOT IN IncludeExtensions '$($IncludeExtensions -join '; ')'."
             }
         }
 
         # Extension Exclude Filter
         if ($shouldProcess -and $ExcludeExtensions.Count -gt 0) {
-            # Write-Host "DEBUG:   ExtExcl Check for '$currentFileNameForDebug'. FileExt: '$currentFileExtForDebug'. TargetExts: '$($ExcludeExtensions -join '; ')'" -ForegroundColor Cyan
-            if ($ExcludeExtensions -contains $currentFileExtForDebug) {
+            $currentFileExtForDebug = $file.Extension.ToLowerInvariant() # Normalleştirilmiş uzantılarla karşılaştırmak için
+            if ($ExcludeExtensions -contains $currentFileExtForDebug) { # $ExcludeExtensions CollectAndPrint.ps1'de normalleştirilmiş olmalı
                 $shouldProcess = $false
-                $reasonForFiltering = "Ext '$currentFileExtForDebug' IN ExcludeExtensions '$($ExcludeExtensions -join '; ')'."
-                # Write-Host "DEBUG:   '$currentFileNameForDebug' FAILED ExcludeExtensions. Reason: $reasonForFiltering" -ForegroundColor Red
-            } else {
-                # Write-Host "DEBUG:   '$currentFileNameForDebug' PASSED ExcludeExtensions." -ForegroundColor Green
+                $reasonForFiltering = "Ext '$($file.Extension)' IN ExcludeExtensions '$($ExcludeExtensions -join '; ')'."
             }
         }
 
@@ -99,9 +142,9 @@ function Get-FilteredFileItems {
         }
 
         if ($shouldProcess) {
-            # Write-Host "DEBUG: File '$($file.FullName)' PASSED ALL FILTERS." -ForegroundColor Green
             $filteredFileResult.Add($file)
         } else {
+            # İsteğe bağlı: Her filtrelenen dosya için detaylı loglama
             # Write-Host "DEBUG: File '$($file.FullName)' FILTERED OUT. Final Reason: $reasonForFiltering" -ForegroundColor Red
         }
     }
