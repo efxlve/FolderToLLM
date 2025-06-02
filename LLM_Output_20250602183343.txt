@@ -1,0 +1,39 @@
+LLM File Collector Output
+Root Directory: /Users/efxlve/Desktop/FolderToLLM-main
+Execution Timestamp: 2025-06-02 18:33:43
+==================================================
+
+DIRECTORY STRUCTURE:
+--------------------------------------------------
+├── exampleOutput
+│   └── LLM_Output_20250526140904.txt
+├── .DS_Store
+├── BASIT_KULLANIM.md
+├── collect_and_print.sh
+├── CollectAndPrint.ps1
+├── DART_FLUTTER_GUIDE.md
+├── debug_dart_issue.sh
+├── folderToLLM.bat
+├── folderToLLM.sh
+├── format_output_string.sh
+├── Format-OutputString.ps1
+├── get_directory_structure.sh
+├── get_filtered_files.sh
+├── Get-DirectoryStructure.ps1
+├── Get-FilteredFiles.ps1
+├── install_mac.sh
+├── MAC_ADAPTATION_SUMMARY.md
+├── MacTest_Output_20250602182351.txt
+├── read_text_file_content.sh
+├── Read-TextFileContent.ps1
+├── README_Mac.md
+├── README.md
+├── test_mac_version.sh
+├── Test_Output_20250602182321.txt
+└── USAGE_EXAMPLES_TR.md
+
+==================================================
+FILE CONTENTS:
+--------------------------------------------------
+
+No files matched the criteria or were found.
